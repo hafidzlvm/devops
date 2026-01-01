@@ -1,0 +1,36 @@
+services:
+  nginx:
+    container_name: nginx
+    image: nginx:latest
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - your-domain # Update this with your application service network
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./nginx/secure/:/etc/nginx/templates/
+      - /etc/localtime:/etc/localtime:ro
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+      - ./nginx/99-autoreload.sh:/docker-entrypoint.d/99-autoreload.sh  # Script to autoreload Nginx when certs are renewed
+    environment:
+      - NGINX_ENVSUBST_TEMPLATE_DIR=/etc/nginx/templates
+      - NGINX_ENVSUBST_TEMPLATE_SUFFIX=.template
+      - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx/conf.d
+
+  certbot:
+    image: certbot/certbot
+    restart: unless-stopped
+    networks:
+      - your-domain
+    volumes:
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"  # Renew certificates every 12 hours
+
+networks:
+  your-domain:
+    external: true # Set to false if you want Docker Compose to create the network
+

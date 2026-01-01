@@ -1,0 +1,25 @@
+services:
+  portainer:
+    container_name: portainer
+    image: portainer/portainer-ce:lts
+    restart: unless-stopped
+    networks:
+      - your-domain
+    ports:
+      - '${PORTAINER_PORT:-9000}:9000'
+      - '${PORTAINER_EDGE_PORT:-9443}:9443'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+      - /etc/localtime:/etc/localtime:ro
+      - ../nginx-platform/nginx/certbot/conf/live/portainer.${APP_DOMAIN}:/certs/live/portainer.${APP_DOMAIN}:ro
+      - ../nginx-platform/nginx/certbot/conf/archive/portainer.${APP_DOMAIN}:/certs/archive/portainer.${APP_DOMAIN}:ro
+    command: --tlscert /certs/live/portainer.${APP_DOMAIN}/fullchain.pem --tlskey /certs/live/portainer.${APP_DOMAIN}/privkey.pem
+
+volumes:
+  portainer_data:
+    driver: local
+
+networks:
+  your-domain:
+    external: true
