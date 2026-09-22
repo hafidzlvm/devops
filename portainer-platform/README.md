@@ -11,7 +11,7 @@ Docker container management platform using Portainer Community Edition.
 
 1. Copy environment template file:
 ```bash
-cp env.template .env
+cp .env.example .env
 ```
 
 2. Edit `.env` file according to your needs:
@@ -19,10 +19,17 @@ cp env.template .env
 nano .env
 ```
 
-3. Make sure Docker network is created (if using external network):
+3. Make sure Docker network is created (must match `NETWORK_NAME` in `.env`):
 ```bash
 docker network create your-domain
 ```
+
+> Volumes are env-driven: `portainer_data_${PORTAINER_VOLUME_TYPE}` (`dir` |
+> `nfs`, see `.env.example`). `dir` mode needs an existing absolute host path
+> (`mkdir -p` it first). `CERTBOT_BASE_DIR` must equal nginx-platform's
+> `CERTBOT_CONF_VOLUME_PATH` for the TLS setup below (dir mode only).
+> `PORTAINER_COMMAND` overrides the full container command (default = TLS;
+> set `-H unix:///var/run/docker.sock` for plain HTTP or custom cert paths).
 
 4. Run Portainer:
 ```bash
@@ -67,8 +74,6 @@ server {
 
     ssl_certificate /etc/letsencrypt/live/portainer.${APP_DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/portainer.${APP_DOMAIN}/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     location / {
         return 301 https://$host$request_uri;
@@ -146,8 +151,6 @@ server {
 
     ssl_certificate /etc/letsencrypt/live/portainer.${APP_DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/portainer.${APP_DOMAIN}/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     location / {
         return 301 https://$host$request_uri;

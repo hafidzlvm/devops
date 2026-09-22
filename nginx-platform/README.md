@@ -13,8 +13,8 @@ This setup allows you to configure SSL with Let's Encrypt using Certbot and Ngin
 ```
 .
 ├── docker-compose.yml
-├── .env (create from env.template)
-├── env.template
+├── .env (create from .env.example)
+├── .env.example
 ├── init-letsencrypt.sh
 ├── nginx/
 │   ├── secure/
@@ -36,10 +36,10 @@ This setup allows you to configure SSL with Let's Encrypt using Certbot and Ngin
 
 ### 1. Setup Environment Variables
 
-Copy `env.template` file to `.env` and adjust with your domain and email:
+Copy `.env.example` file to `.env` and adjust with your domain and email:
 
 ```bash
-cp env.template .env
+cp .env.example .env
 ```
 
 Edit `.env` file:
@@ -48,6 +48,17 @@ Edit `.env` file:
 APP_DOMAIN=your-domain.com
 SSL_EMAIL=contact@your-domain.com
 ```
+
+### 1b. Volumes & Network (env-driven)
+
+All data volumes follow the `_nfs`/`_dir` pair pattern — both are declared in
+`docker-compose.yml`, `CERTBOT_VOLUME_TYPE` (`dir` | `nfs`) switches which one
+is mounted. All `CERTBOT_VOLUME_*` vars must be set (see `.env.example`).
+`dir` mode binds an absolute host path — create it first (`mkdir -p`); the
+`init-letsencrypt.sh` script does this automatically. `NETWORK_NAME` sets the
+shared Docker network (also auto-created by the init script). CORS origins
+come from `CORS_BASE_DOMAINS` / `CORS_EXTRA_ORIGINS` — generated at container
+start by `nginx/90-generate-cors.sh`, never hand-edit the map.
 
 ### 2. Update Docker Compose
 
@@ -75,7 +86,6 @@ chmod +x init-letsencrypt.sh
 ```
 
 This script will:
-- Download recommended TLS parameters
 - Create dummy certificate to start Nginx
 - Delete dummy certificate
 - Request real Let's Encrypt certificate
@@ -129,8 +139,6 @@ server {
 
     ssl_certificate /etc/letsencrypt/live/domain-b.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/domain-b.com/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     location / {
         proxy_pass http://app-domain-b:3000;  # Domain B application service name
@@ -256,11 +264,8 @@ This setup uses **Let's Encrypt** (via Certbot) to get free SSL certificate, and
 
 #### **Phase 1: Initial Setup (init-letsencrypt.sh)**
 
-1. **Download TLS Parameters** (Lines 26-32)
-   - Download `options-ssl-nginx.conf` and `ssl-dhparams.pem` from Certbot
-   - These files contain recommended TLS security configuration (cipher suites, protocols, etc.)
-
-2. **Create Dummy Certificate** (Lines 34-41)
+1. **Create Dummy Certificate**
+   - TLS policy (Mozilla intermediate) already lives in `nginx/nginx.conf`, so no per-server TLS files are needed.
    - Create dummy (self-signed) certificate with OpenSSL
    - **Why?** Nginx cannot start without certificate. So we create dummy first so Nginx can run
    - This certificate is only valid for 1 day and only for localhost
@@ -306,10 +311,7 @@ This setup uses **Let's Encrypt** (via Certbot) to get free SSL certificate, and
 │                    INITIAL SETUP FLOW                        │
 └─────────────────────────────────────────────────────────────┘
 
-1. Download TLS Parameters
-   └─> options-ssl-nginx.conf, ssl-dhparams.pem
-
-2. Create Dummy Certificate (self-signed)
+1. Create Dummy Certificate (self-signed)
    └─> Nginx can start
 
 3. Start Nginx Container
@@ -387,9 +389,6 @@ server {
     # SSL Certificate configuration
     ssl_certificate /etc/letsencrypt/live/${APP_DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${APP_DOMAIN}/privkey.pem;
-    # SSL Security settings
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     # Proxy to backend application (if configured)
 }
 ```
