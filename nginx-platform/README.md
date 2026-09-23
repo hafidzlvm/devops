@@ -135,6 +135,148 @@ set $backend_nama service-name;
 proxy_pass http://$backend_nama:9000;
 ```
 
+### Reload vs restart vs up -d (kapan pakai apa)
+
+| Perubahan | Perintah | Kenapa |
+|---|---|---|
+| File baru/ubah di `nginx/servers/` (mount sudah ada) | `docker compose exec nginx nginx -s reload` | include wildcard dibaca ulang, tanpa downtime |
+| Ubah isi `nginx/secure/*.template` | `docker compose restart nginx` | template di-render ulang oleh entrypoint |
+| Ubah `.env`, tambah mount/volume, `docker-compose.yml` | `docker compose up -d` | container harus recreate agar env/mount baru kepakai (`restart`/`reload` tak mempan) |
+| Cert baru terbit | otomatis oleh `init-letsencrypt.sh` (reload di akhir) | — |
+
+## Cookbook (step-by-step per kebutuhan)
+
+Aturan umum semua resep: DNS dulu → file config → cert → reload/up → verify.
+Semua contoh memakai pola lazy-DNS (backend boleh belum jalan saat nginx start).
+
+### 0. Pasang nginx di server baru (fresh install)
+
+```bash
+git clone <repo> stacks/devops && cd stacks/devops/nginx-platform
+cp .env.example .env && nano .env   # APP_DOMAIN, SSL_EMAIL, NETWORK_NAME, volume *_TYPE=dir untuk data lokal
+# DNS: pastikan APP_DOMAIN (+ www kalau dipakai) A-record ke IP server ini
+# Firewall: buka 80 + 443 (ufw + panel VPS)
+chmod +x init.sh init-letsencrypt.sh
+./init-letsencrypt.sh   # dummy → request LE → reload (cover APP_DOMAIN + PORTAINER_DOMAIN bila diisi)
+./init.sh               # start rutin (dipakai juga sehabis reboot)
+curl -sI http://$APP_DOMAIN/.well-known/acme-challenge/x  # 404 = port 80 terbuka & nginx jawab
+curl -sI https://$APP_DOMAIN/                             # 404/200 = TLS jalan
+```
+
+### 1. Config nginx untuk Portainer
+
+Template generiknya sudah ikut repo (`nginx/secure/portainer.conf.template`,
+pakai `${PORTAINER_DOMAIN}` — tanpa hardcode domain):
+
+```bash
+# 1. nginx-platform/.env:
+PORTAINER_DOMAIN=portainer.example.com
+# 2. DNS portainer.example.com → IP server
+# 3. Terbitkan cert + render template:
+./init-letsencrypt.sh
+docker compose up -d   # sekali saja, agar env baru ke-mount dan template ke-render
+# 4. Verify:
+curl -sI https://portainer.example.com/   # 200/307 dari Portainer = ok
+```
+
+Backend Portainer jalan plain HTTP (`PORTAINER_COMMAND="-H unix:///var/run/docker.sock"`
+di `portainer-platform/.env`), TLS berhenti di nginx. Kalau server ini tidak
+pakai Portainer: kosongkan `PORTAINER_DOMAIN` DAN hapus `portainer.conf.template`
+(atau server tidak akan start — lihat template rules di atas).
+
+### 2. Config nginx untuk service aplikasi baru
+
+Contoh: aplikasi `myapp:8000` di network yang sama (`NETWORK_NAME`).
+JANGAN taruh di `secure/*.template` (itu untuk blok generik env-driven) —
+pakai overlay gitignored `nginx/servers/myapp.conf`:
+
+```nginx
+server {
+    listen 80;
+    server_name myapp.example.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name myapp.example.com;
+
+    server_tokens off;
+    client_max_body_size 50M;
+
+    ssl_certificate /etc/letsencrypt/live/myapp.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/myapp.example.com/privkey.pem;
+
+    location / {
+        resolver 127.0.0.11 valid=30s;
+        set $myapp_backend myapp;
+        proxy_pass http://$myapp_backend:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+
+        # CORS langsung dari map front:
+        add_header 'Access-Control-Allow-Origin' $CORS_ALL_ALLOWED_DOMAIN always;
+        add_header 'Access-Control-Allow-Credentials' 'true' always;
+    }
+}
+```
+
+```bash
+# 1. DNS myapp.example.com → IP server
+# 2. Tulis file di atas sebagai nginx/servers/myapp.conf
+# 3. Cert (manual, sekali per nama baru):
+docker compose run --rm --entrypoint "certbot certonly --webroot -w /var/www/certbot \
+  --email you@example.com -d myapp.example.com \
+  --rsa-key-size 4096 --agree-tos --no-eff-email --force-renewal" certbot
+# 4. Reload saja (tanpa recreate) — kecuali folder servers/ belum pernah ada saat
+#    container dibuat, maka mkdir + `docker compose up -d` sekali:
+docker compose exec nginx nginx -s reload
+# 5. Verify:
+curl -sI https://myapp.example.com/
+```
+
+### 3. URL baru dengan prefix `api-` (mis. `api.example.com`)
+
+Sama persis seperti resep 2 dengan `server_name api.example.com`.
+Dua catatan:
+
+- Subdomain dari base yang sudah terdaftar di `CORS_BASE_DOMAINS` otomatis
+  lolos CORS — tanpa config tambahan. Base baru → tambah ke `.env` +
+  `docker compose up -d` (render ulang map).
+- Cert: boleh lineage terpisah (`-d api.example.com` saja) atau digabung SAN
+  dengan domain lain dalam satu `certonly`. Kalau digabung, nama `-d` PERTAMA
+  menentukan folder `live/` — jangan ubah urutannya di renewal berikutnya
+  (path cert di config mengacu ke folder itu).
+
+### 4. Domain baru di satu server (mis. apex + www)
+
+Sama seperti resep 2, dengan `server_name domainbaru.com www.domainbaru.com`
+dan satu cert SAN mencakup keduanya:
+
+```bash
+docker compose run --rm --entrypoint "certbot certonly --webroot -w /var/www/certbot \
+  --email you@example.com -d domainbaru.com -d www.domainbaru.com \
+  --rsa-key-size 4096 --agree-tos --no-eff-email --force-renewal" certbot
+docker compose exec nginx nginx -s reload
+```
+
+Batasan Let's Encrypt: ~50 cert/minggu per domain — untuk latihan pakai
+`STAGING=1` di `.env` lalu `./init-letsencrypt.sh` (staging hanya untuk
+APP_DOMAIN/PORTAINER_DOMAIN).
+
 ## Multiple Domain Setup
 
 This setup supports **multiple domains/subdomains** on the same server. Each domain can have its own configuration and SSL certificate.

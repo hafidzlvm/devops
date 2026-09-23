@@ -170,8 +170,10 @@ Aturan: `dir` wajib path absolut + sudah `mkdir -p` (driver tidak buatkan);
 ## Mendaftarkan service baru ke front (runbook)
 
 1. DNS domain → IP server.
-2. `devops/nginx-platform/nginx/secure/<service>.conf.template` (server 80 +
-   443, `proxy_pass http://<sidecar>:80`, blok acme-challenge).
+2. Tulis server block sebagai `devops/nginx-platform/nginx/servers/<service>.conf`
+   (overlay gitignored per-server, BUKAN `secure/*.template` — itu hanya untuk
+   blok generik env-driven). Isi: server 80 + 443, blok acme-challenge,
+   `proxy_pass` pola lazy-DNS (lihat cookbook nginx-platform README).
 3. Cert: `certbot certonly --webroot ... -d <domain>` dari `nginx-platform`.
 4. CORS: tambah base ke `CORS_BASE_DOMAINS` kalau base baru (subdomain dari
    base terdaftar = otomatis, tanpa apa-apa).
