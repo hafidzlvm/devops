@@ -23,6 +23,7 @@ while [ "$#" -gt 0 ]; do
         -b) backend="${2:?missing value for -b}"; shift 2 ;;
         -n) name="${2:?missing value for -n}"; shift 2 ;;
         -m) max_body="${2:?missing value for -m}"; shift 2 ;;
+        --replace) replace=1; shift ;;
         -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
         *) echo "Unknown arg: $1 (see --help)." >&2; exit 1 ;;
     esac
@@ -46,8 +47,69 @@ fi
 
 mkdir -p nginx/servers
 conf="nginx/servers/${name}.conf"
-[ -f "$conf" ] && { echo "Refusing: $conf already exists (edit it by hand)." >&2; exit 1; }
+if [ -f "$conf" ] && [ "${replace:-0}" != "1" ]; then
+    echo "Refusing: $conf already exists (edit it by hand, or re-run with --replace)." >&2
+    exit 1
+fi
+[ -f "$conf" ] && cp "$conf" "$conf.bak-$(date +%Y%m%d%H%M%S)" && echo "Backed up existing $conf"
 
+# Phase 1: HTTP-only block first — the running nginx must serve the ACME
+# challenge BEFORE the cert exists (a full config with 443 would fail its
+# config test and the reload would abort, leaving the old config active).
+cat > "$conf" <<EOF
+server {
+    listen 80;
+    server_name ${server_names};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+EOF
+echo "Wrote phase-1 (HTTP only) $conf"
+
+if docker inspect nginx --format '{{range .Mounts}}{{println .Destination}}{{end}}' 2>/dev/null | grep -qx "/etc/nginx/servers"; then
+    echo "### Reloading nginx (phase 1) ..."
+    docker compose exec nginx nginx -s reload
+else
+    echo "### servers/ not mounted yet — recreating nginx once ..."
+    docker compose up -d
+    sleep 8
+fi
+echo
+# (Phase-2 full config is written AFTER the cert exists — see below.)
+
+live="/etc/letsencrypt/live/${primary}"
+need_cert=1
+if docker compose run --rm --entrypoint "sh -c 'test -f $live/fullchain.pem'" certbot >/dev/null 2>&1; then
+    issuer=$(docker compose run --rm --entrypoint "sh -c 'openssl x509 -in $live/fullchain.pem -noout -issuer 2>/dev/null'" certbot 2>/dev/null | tail -1)
+    if ! echo "$issuer" | grep -qi "localhost"; then
+        echo "Real certificate already exists for $primary — skipping issuance."
+        need_cert=0
+    fi
+fi
+
+if [ "$need_cert" = "1" ]; then
+echo "### Requesting certificate for: ${server_names} ..."
+domain_args=""
+for d in "${domains[@]}"; do domain_args="$domain_args -d $d"; done
+# shellcheck disable=SC2086
+docker compose run --rm --entrypoint "\
+  certbot certonly --webroot -w /var/www/certbot \
+    ${email_arg} \
+    $domain_args \
+    --rsa-key-size 4096 \
+    --agree-tos \
+    --no-eff-email \
+    --force-renewal" certbot
+echo
+fi
+
+# Phase 2: full config (443 needs the cert that now exists).
 cat > "$conf" <<EOF
 server {
     listen 80;
@@ -91,30 +153,10 @@ server {
     }
 }
 EOF
-echo "Wrote $conf"
+echo "Wrote phase-2 (full) $conf"
 
-echo "### Requesting certificate for: ${server_names} ..."
-domain_args=""
-for d in "${domains[@]}"; do domain_args="$domain_args -d $d"; done
-# shellcheck disable=SC2086
-docker compose run --rm --entrypoint "\
-  certbot certonly --webroot -w /var/www/certbot \
-    ${email_arg} \
-    $domain_args \
-    --rsa-key-size 4096 \
-    --agree-tos \
-    --no-eff-email \
-    --force-renewal" certbot
-echo
-
-if docker inspect nginx --format '{{range .Mounts}}{{println .Destination}}{{end}}' 2>/dev/null | grep -qx "/etc/nginx/servers"; then
-    echo "### Reloading nginx ..."
-    docker compose exec nginx nginx -s reload
-else
-    echo "### servers/ not mounted yet — recreating nginx once ..."
-    docker compose up -d
-    sleep 8
-fi
+echo "### Reloading nginx (phase 2) ..."
+docker compose exec nginx nginx -s reload
 echo
 echo "### Verify:"
 for d in "${domains[@]}"; do

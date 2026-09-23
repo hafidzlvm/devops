@@ -133,6 +133,22 @@ set $backend_nama service-name;
 proxy_pass http://$backend_nama:9000;
 ```
 
+### Gotchas (temuan lapangan — dibaca sebelum debug)
+
+1. **Challenge harus live SEBELUM `certonly`.** Urutan yang benar: tulis blok
+   `:80` (challenge + redirect) → reload → `certonly` → tulis blok `:443` →
+   reload. `add-site.sh` melakukan ini otomatis (two-phase). Alur manual yang
+   `certonly` dulu baru reload akan 404 karena nginx yang jalan belum kenal
+   nama domainnya.
+2. **Catch-all stock image.** Selama tidak ada blok yang match, request `:80`
+   jatuh ke `default.conf` bawaan image (`server_name localhost`, tanpa blok
+   challenge). Jadi 404 saat issuance = cek dulu blok `:80` domain itu sudah
+   ke-load (`docker exec nginx nginx -T | grep server_name`).
+3. **Backend swarm = nama lengkap.** Di DNS swarm hanya `stack_service`
+   (contoh: `falwah-collection-frontend_falwah-collection-frontend-app`) yang
+   ke-resolve — nama pendek tidak. Selalu pakai nama lengkap di `proxy_pass`
+   (via pola lazy-DNS di atas).
+
 ### Reload vs restart vs up -d (kapan pakai apa)
 
 | Perubahan | Perintah | Kenapa |
