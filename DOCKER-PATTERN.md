@@ -1,3 +1,4 @@
+
 # DOCKER-PATTERN.md — pola baku service di bawah nginx-platform
 
 Dokumen ini hasil analisa `portofolio` vs pola `devops` (nginx-platform +
@@ -35,6 +36,12 @@ services:
     image: nginx:alpine
     container_name: <name>-nginx
     restart: unless-stopped
+    environment:
+      - VIRTUAL_HOST=${<name>_DOMAIN}
+      - VIRTUAL_PORT=80
+      - LETSENCRYPT_HOST=${<name>_DOMAIN}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+      - CORS_ALLOWED_DOMAIN=${CORS_ALLOWED_DOMAIN}
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
@@ -52,7 +59,8 @@ services:
     environment:
       - NODE_ENV=production
     healthcheck:
-      test: ["CMD", "wget", "--no-proxy", "-q", "--spider", "http://localhost:3000"]
+      test:
+        ["CMD", "wget", "--no-proxy", "-q", "--spider", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -60,7 +68,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.50'
+          cpus: "0.50"
           memory: 512M
     networks:
       - shared
@@ -88,7 +96,7 @@ NETWORK_NAME=your-domain
 - **CORS: emit saja, jangan whitelist.** Whitelist hidup di front map.
   Sidecar baca hasil front dari header dan cetak apa adanya:
 
-```nginx
+````nginx
 # $http_x_cors_allowed_domain diisi front proxy HANYA jika Origin lolos map.
 # Kosong = header tidak dikirim = browser blokir. Jangan tambah map sendiri.
 add_header 'Access-Control-Allow-Origin' $http_x_cors_allowed_domain always;
@@ -106,6 +114,28 @@ if ($request_method = 'OPTIONS') {
     return 204;
 }
 ```
+
+### Pengecualian: map penyempit per-service (opsional)
+
+Kalau whitelist front bersifat gabungan untuk banyak service, sidecar boleh
+mempersempit ke subset miliknya sendiri. Syarat mutlak: **hanya menyempit,
+tidak pernah melebar** — `default ""`, dan tiap entri menggemakan kembali
+`$http_x_cors_allowed_domain` apa adanya:
+
+```nginx
+# Allowlist khusus service ini (subset dari whitelist front).
+# default "" = tolak; hanya Origin terdaftar yang digemakan kembali.
+map $http_x_cors_allowed_domain $<name>_cors_origin {
+    default "";
+    "https://<service>.example.com"     $http_x_cors_allowed_domain;
+    "https://www.<service>.example.com" $http_x_cors_allowed_domain;
+}
+```
+
+Lalu kedua `add_header 'Access-Control-Allow-Origin'` memakai
+`$<name>_cors_origin`. Tetap dilarang: `map` pass-through
+(`default $var-itu-juga`), entri wildcard longgar, atau nilai hardcode
+selain gema variabel front.
 
 > Kenapa sidecar tidak boleh publish port: header `X-CORS-Allowed-Domain`
 > datang dari client. Selama sidecar hanya reachable via network internal,
@@ -132,7 +162,7 @@ volumes:
       type: none
       o: bind
       device: ${<NAME>_VOLUME_PATH}
-```
+````
 
 Aturan: `dir` wajib path absolut + sudah `mkdir -p` (driver tidak buatkan);
 `nfs` wajib server NFS beneran (localhost bukan NFS server — pakai `dir`).
@@ -159,7 +189,8 @@ Aturan: `dir` wajib path absolut + sudah `mkdir -p` (driver tidak buatkan);
 - ❌ Nama network hardcode (`solusi-digital-khatulistiwa`) — pakai pola
   `shared` + `name: ${NETWORK_NAME}` supaya compose jalan di server mana pun.
 - ❌ `map` pass-through (`default $var-itu-juga`) — tidak ngapa-ngapain,
-  pakai variabelnya langsung.
+  pakai variabelnya langsung. Yang dibolehkan hanya map _penyempit_
+  (`default ""` + allowlist eksplisit, lihat pengecualian di atas).
 
 ## Verify per service
 
