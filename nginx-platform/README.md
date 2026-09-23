@@ -13,24 +13,22 @@ This setup allows you to configure SSL with Let's Encrypt using Certbot and Ngin
 ```
 .
 ├── docker-compose.yml
-├── .env (create from .env.example)
+├── .env (create from .env.example, gitignored)
 ├── .env.example
-├── init-letsencrypt.sh
+├── init.sh                    # start service (network + up -d)
+├── init-letsencrypt.sh        # certs only (APP_DOMAIN + optional PORTAINER_DOMAIN)
+├── add-site.sh                # register new front endpoint (servers/ + cert + reload)
+├── enable-portainer.sh        # set PORTAINER_DOMAIN + cert + up
 ├── nginx/
+│   ├── nginx.conf             # TLS policy sentral + includes
 │   ├── secure/
-│   │   ├── default.conf.template          # Main domain
-│   │   ├── domain-b.conf.template          # Additional domain (optional)
-│   │   └── domain-c.conf.template          # Additional domain (optional)
-│   ├── certbot/
-│   │   ├── conf/
-│   │   │   ├── live/                       # Active certificates
-│   │   │   │   ├── domain-a.com/
-│   │   │   │   └── domain-b.com/
-│   │   │   └── archive/                    # Archived certificates
-│   │   └── www/                            # Webroot for validation
-│   └── 99-autoreload.sh
+│   │   └── portainer.conf.template    # generic env-driven block (${PORTAINER_DOMAIN})
+│   ├── servers/               # per-server statics, GITIGNORED (./add-site.sh writes here)
+│   ├── 90-generate-cors.sh   # builds CORS map from .env at container start
+│   └── 99-autoreload.sh      # periodic nginx reload (cert renewals)
 └── README.md
 ```
+(Cert live di docker volume certbot, bukan di repo — jangan cari folder `certbot/`.)
 
 ## Configuration
 
@@ -72,8 +70,8 @@ Edit `docker-compose.yml` and adjust:
 
 ### 3. Update Nginx Configuration
 
-Edit `nginx/secure/default.conf.template` and adjust:
-- `proxy_pass http://my-app:3000;` with your service name and application port
+Jangan edit template generik untuk domain asli — ikut Cookbook di bawah
+(`./add-site.sh` untuk service baru, `nginx/servers/*.conf` overlay per-server).
 
 ## Usage
 
@@ -298,88 +296,10 @@ This setup supports **multiple domains/subdomains** on the same server. Each dom
 
 ### How to Add New Domain
 
-#### 1. Create Template File for New Domain
-
-Create a new file in `nginx/secure/` with format `domain-name.conf.template`:
-
-```bash
-cd /home/hafdiz/sdk/devops/nginx-platform
-nano nginx/secure/domain-b.conf.template
-```
-
-Example content for Domain B:
-
-```nginx
-server {
-    listen 80;
-    server_name domain-b.com www.domain-b.com;
-
-    location / {
-        return 301 https://$host$request_uri;
-    }
-
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-}
-
-server {
-    listen 443 ssl;
-    server_name domain-b.com www.domain-b.com;
-
-    server_tokens off;
-    client_max_body_size 20M;
-
-    ssl_certificate /etc/letsencrypt/live/domain-b.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/domain-b.com/privkey.pem;
-
-    location / {
-        proxy_pass http://app-domain-b:3000;  # Domain B application service name
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-**Important Notes:**
-- Replace `domain-b.com` with your domain
-- Replace `app-domain-b` with application service name in docker-compose
-- Replace port `3000` with your application port
-
-#### 2. Generate SSL Certificate for New Domain
-
-```bash
-cd /home/hafdiz/sdk/devops/nginx-platform
-export SSL_EMAIL=your@gmail.com
-docker compose run --rm --entrypoint "\
-  certbot certonly --webroot -w /var/www/certbot \
-    --email ${SSL_EMAIL} \
-    --agree-tos \
-    --no-eff-email \
-    -d domain-b.com \
-    -d www.domain-b.com" certbot
-```
-
-**For subdomain:**
-```bash
-docker compose run --rm --entrypoint "\
-  certbot certonly --webroot -w /var/www/certbot \
-    --email ${SSL_EMAIL} \
-    --agree-tos \
-    --no-eff-email \
-    -d subdomain.domain-b.com" certbot
-```
-
-#### 3. Restart Nginx
-
-```bash
-docker compose restart nginx
-```
+See Cookbook recipes 2–4 above (fast path: `./add-site.sh -d domain.com
+-d www.domain.com -b app:3000`). Manual equivalent: write the server blocks
+as `nginx/servers/<name>.conf` (gitignored overlay — NOT `secure/*.template`),
+issue the cert with `certbot certonly --webroot`, then `exec nginx -s reload`.
 
 ### Where to put per-server domains (template stays generic)
 
@@ -391,11 +311,13 @@ Use `nginx/secure/*.conf.template` only for env-driven generic blocks.
 ### File Structure for Multiple Domains
 
 ```
-nginx-platform/nginx/secure/
-├── default.conf.template              # Main domain (your-domain.com)
-├── domain-b.conf.template             # Domain B (domain-b.com)
-├── domain-c.conf.template             # Domain C (domain-c.com)
-└── api.domain-b.conf.template         # Subdomain (api.domain-b.com)
+nginx-platform/nginx/secure/     # committed, generic env-driven blocks
+├── portainer.conf.template      # uses ${PORTAINER_DOMAIN}
+
+nginx-platform/nginx/servers/    # GITIGNORED per-server statics (./add-site.sh writes here)
+├── myapp.conf                   # server_name myapp.example.com
+├── api.example.com.conf         # server_name api.example.com (atau nama bebas)
+└── hafidzlvm.conf               # server_name hafidzlvm.org www.hafidzlvm.org
 ```
 
 ### Benefits of Multiple Domain Setup
@@ -410,20 +332,19 @@ nginx-platform/nginx/secure/
 
 To remove domain from Nginx:
 
-1. **Delete template file:**
+1. **Delete its file in the overlay:**
 ```bash
-rm nginx/secure/domain-b.conf.template
+rm nginx/servers/myapp.conf
 ```
 
-2. **Restart Nginx:**
+2. **Reload Nginx (no recreate needed):**
 ```bash
-docker compose restart nginx
+docker compose exec nginx nginx -s reload
 ```
 
-3. **(Optional) Delete certificate:**
+3. **(Optional) Delete certificate** (inside the certbot volume via container):
 ```bash
-rm -rf nginx/certbot/conf/live/domain-b.com
-rm -rf nginx/certbot/conf/archive/domain-b.com
+docker compose run --rm --entrypoint "sh -c 'rm -rf /etc/letsencrypt/live/myapp.example.com /etc/letsencrypt/archive/myapp.example.com /etc/letsencrypt/renewal/myapp.example.com.conf'" certbot
 ```
 
 ### Important Notes for Multiple Domains
@@ -480,7 +401,7 @@ This setup uses **Let's Encrypt** (via Certbot) to get free SSL certificate, and
 5. **Request Real Certificate from Let's Encrypt** (Lines 58-81)
    - Certbot uses **webroot method** (`--webroot -w /var/www/certbot`)
    - Let's Encrypt will validate domain by accessing `http://your-domain.com/.well-known/acme-challenge/`
-   - Nginx is already configured to serve this path from `/var/www/certbot` (see `default.conf.template` lines 9-11)
+   - Nginx is already configured to serve this path from `/var/www/certbot` (every front block carries the `/.well-known/acme-challenge/` location — see Cookbook examples)
    - After validation succeeds, certificate will be saved at `/etc/letsencrypt/live/your-domain/`
 
 6. **Reload Nginx** (Line 86)
@@ -567,7 +488,7 @@ The `secure` folder is **a folder containing Nginx configuration for secure HTTP
    - HTTP to HTTPS redirect to force all traffic to use HTTPS
    - Security headers (if added)
 
-### Configuration Structure in `default.conf.template`
+### Typical front block structure (see `nginx/secure/portainer.conf.template` or any `nginx/servers/*.conf`)
 
 ```nginx
 # Server Block 1: HTTP (port 80)
@@ -587,8 +508,8 @@ server {
 server {
     listen 443 ssl;
     # SSL Certificate configuration
-    ssl_certificate /etc/letsencrypt/live/${APP_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${APP_DOMAIN}/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
     # Proxy to backend application (if configured)
 }
 ```
@@ -598,30 +519,27 @@ server {
 Files use `.template` extension because:
 
 1. **Environment Variable Substitution**
-   - Nginx container will automatically substitute `${APP_DOMAIN}` with value from `.env`
+   - Nginx container will automatically substitute `${APP_DOMAIN}` / `${PORTAINER_DOMAIN}` with values from `.env`
    - Uses `envsubst` which is built-in in Nginx Docker image
+   - Only variables present in the container environment are substituted — every `${VAR}` in a template must exist in `.env` (see Template authoring rules above)
 
 2. **Dynamic Configuration & Multiple Domain Support**
    - Can be used for multiple domains without manually editing files
    - Each `.template` file will automatically be generated into a separate `.conf` file
-   - Just add a new template file for a new domain, Nginx will automatically process it
-   - Environment variable `${APP_DOMAIN}` will be substituted from `.env` file (for default.conf.template)
+   - Per-server real domains go to `nginx/servers/*.conf` instead (gitignored, no envsubst)
 
 ### Volume Mounting
 
-In `docker-compose.yml` line 13:
+In `docker-compose.yml`:
 ```yaml
 volumes:
   - ./nginx/secure/:/etc/nginx/templates/
+  - ./nginx/servers/:/etc/nginx/servers/
 ```
 
 This means:
-- All `.template` files in `nginx/secure/` will be copied to `/etc/nginx/templates/` in container
-- Nginx will automatically process **all** `.template` files and generate `.conf` files in `/etc/nginx/conf.d/`
-- Each template file will become a separate configuration file:
-  - `default.conf.template` → `/etc/nginx/conf.d/default.conf`
-  - `domain-b.conf.template` → `/etc/nginx/conf.d/domain-b.conf`
-  - `domain-c.conf.template` → `/etc/nginx/conf.d/domain-c.conf`
+- All `.template` files in `nginx/secure/` are rendered to `/etc/nginx/conf.d/` (one `.conf` per template, e.g. `portainer.conf.template` → `portainer.conf`)
+- All `.conf` files in `nginx/servers/` (gitignored overlay) are used as-is via the `include /etc/nginx/servers/*.conf;` line in `nginx/nginx.conf`
 - All configurations will be active simultaneously
 
 ### Alternative Folder Names
