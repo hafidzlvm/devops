@@ -4,22 +4,36 @@ services:
     image: portainer/portainer-ce:lts
     restart: unless-stopped
     networks:
-      - your-domain
+      - shared
     ports:
       - '${PORTAINER_PORT:-9000}:9000'
       - '${PORTAINER_EDGE_PORT:-9443}:9443'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - portainer_data:/data
+      - portainer_data_${PORTAINER_VOLUME_TYPE:-dir}:/data
+      - portainer_stack:/stack
       - /etc/localtime:/etc/localtime:ro
-      - ../nginx-platform/nginx/certbot/conf/live/portainer.${APP_DOMAIN}:/certs/live/portainer.${APP_DOMAIN}:ro
-      - ../nginx-platform/nginx/certbot/conf/archive/portainer.${APP_DOMAIN}:/certs/archive/portainer.${APP_DOMAIN}:ro
-    command: --tlscert /certs/live/portainer.${APP_DOMAIN}/fullchain.pem --tlskey /certs/live/portainer.${APP_DOMAIN}/privkey.pem
+      - ${CERTBOT_BASE_DIR:-../nginx-platform/nginx/certbot/conf}/live/portainer.${APP_DOMAIN}:/certs/live/portainer.${APP_DOMAIN}:ro
+      - ${CERTBOT_BASE_DIR:-../nginx-platform/nginx/certbot/conf}/archive/portainer.${APP_DOMAIN}:/certs/archive/portainer.${APP_DOMAIN}:ro
+    command: ${PORTAINER_COMMAND:--H unix:///var/run/docker.sock --tlscert /certs/live/portainer.${APP_DOMAIN}/fullchain.pem --tlskey /certs/live/portainer.${APP_DOMAIN}/privkey.pem}
 
 volumes:
-  portainer_data:
+  portainer_data_nfs:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=${PORTAINER_VOLUME_IP},nolock,soft,rw"
+      device: ":${PORTAINER_VOLUME_PATH}"
+  portainer_data_dir:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PORTAINER_VOLUME_PATH}
+  portainer_stack:
     driver: local
 
 networks:
-  your-domain:
+  shared:
+    name: ${NETWORK_NAME:-your-domain}
     external: true

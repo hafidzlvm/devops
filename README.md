@@ -49,7 +49,7 @@ For Docker and Docker Compose installation, visit:
 devops-open/
 ├── nginx-platform/          # Nginx Platform with SSL
 │   ├── docker-compose.yml
-│   ├── env.template
+│   ├── .env.example
 │   ├── init-letsencrypt.sh
 │   ├── nginx/
 │   │   ├── secure/          # Nginx configuration for HTTPS
@@ -58,7 +58,7 @@ devops-open/
 │   └── README.md
 ├── portainer-platform/      # Portainer Platform
 │   ├── docker-compose.yml
-│   ├── env.template
+│   ├── .env.example
 │   └── README.md
 └── README.md                # This file
 ```
@@ -74,7 +74,7 @@ cd nginx-platform
 
 2. Copy and edit environment file:
 ```bash
-cp env.template .env
+cp .env.example .env
 nano .env
 ```
 
@@ -100,7 +100,7 @@ cd portainer-platform
 
 2. Copy and edit environment file:
 ```bash
-cp env.template .env
+cp .env.example .env
 nano .env
 ```
 
@@ -134,7 +134,7 @@ Use Nginx as reverse proxy for Portainer with SSL:
 
 ## 🌐 Network Configuration
 
-All platforms use the same Docker network (`your-domain`) to enable communication between containers. 
+All platforms use the same Docker network (`your-domain`) to enable communication between containers. The name is env-driven: set `NETWORK_NAME` in each platform's `.env` (defaults to `your-domain`, must match across platforms).
 
 **Creating Network:**
 ```bash
@@ -154,7 +154,7 @@ Edit `docker-compose.yml` in each platform and make sure the network name matche
 
 ## 📝 Environment Variables
 
-Each platform has an `env.template` file containing templates for environment variables. Copy that file to `.env` and adjust according to your needs.
+Each platform has an `.env.example` file containing templates for environment variables. Copy that file to `.env` and adjust according to your needs.
 
 **⚠️ Important:** Do not commit `.env` file to repository as it may contain sensitive information.
 

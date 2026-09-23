@@ -13,8 +13,8 @@ This setup allows you to configure SSL with Let's Encrypt using Certbot and Ngin
 ```
 .
 ├── docker-compose.yml
-├── .env (create from env.template)
-├── env.template
+├── .env (create from .env.example)
+├── .env.example
 ├── init-letsencrypt.sh
 ├── nginx/
 │   ├── secure/
@@ -36,10 +36,10 @@ This setup allows you to configure SSL with Let's Encrypt using Certbot and Ngin
 
 ### 1. Setup Environment Variables
 
-Copy `env.template` file to `.env` and adjust with your domain and email:
+Copy `.env.example` file to `.env` and adjust with your domain and email:
 
 ```bash
-cp env.template .env
+cp .env.example .env
 ```
 
 Edit `.env` file:
@@ -47,7 +47,20 @@ Edit `.env` file:
 ```env
 APP_DOMAIN=your-domain.com
 SSL_EMAIL=contact@your-domain.com
+# Optional: second domain for the Portainer dashboard (see Usage below).
+#PORTAINER_DOMAIN=portainer.example.com
 ```
+
+### 1b. Volumes & Network (env-driven)
+
+All data volumes follow the `_nfs`/`_dir` pair pattern — both are declared in
+`docker-compose.yml`, `CERTBOT_VOLUME_TYPE` (`dir` | `nfs`) switches which one
+is mounted. All `CERTBOT_VOLUME_*` vars must be set (see `.env.example`).
+`dir` mode binds an absolute host path — create it first (`mkdir -p`); the
+`init-letsencrypt.sh` script does this automatically. `NETWORK_NAME` sets the
+shared Docker network (also auto-created by the init script). CORS origins
+come from `CORS_BASE_DOMAINS` / `CORS_EXTRA_ORIGINS` — generated at container
+start by `nginx/90-generate-cors.sh`, never hand-edit the map.
 
 ### 2. Update Docker Compose
 
@@ -64,29 +77,62 @@ Edit `nginx/secure/default.conf.template` and adjust:
 
 ## Usage
 
+Script responsibilities — jangan tertukar:
+
+- `./init.sh` — menyalakan service (network + `docker compose up -d`). Ini yang dipakai sehari-hari dan untuk pertama kali menyalakan nginx.
+- `./init-letsencrypt.sh` — hanya urus sertifikat (dummy → request → reload). Idempoten: domain yang sudah punya cert asli di-skip.
+
 ### Initial Setup (First Time)
 
 1. Make sure domain points to your server
-2. Run initialization script:
+2. Copy env dan isi nilai:
 
 ```bash
-chmod +x init-letsencrypt.sh
+cp .env.example .env
+```
+
+`APP_DOMAIN` wajib. `PORTAINER_DOMAIN` opsional — isi jika server ini juga reverse-proxy Portainer (template `nginx/secure/portainer.conf.template` memakainya); jika tidak dipakai, hapus file template tersebut (lihat catatan templating di bawah).
+
+3. Run initialization script:
+
+```bash
+chmod +x init.sh init-letsencrypt.sh
 ./init-letsencrypt.sh
 ```
 
-This script will:
-- Download recommended TLS parameters
-- Create dummy certificate to start Nginx
-- Delete dummy certificate
-- Request real Let's Encrypt certificate
-- Reload Nginx with new certificate
+This script will (for `APP_DOMAIN`, plus `PORTAINER_DOMAIN` when set):
+- Skip domains that already have a real certificate
+- Create dummy certificate(s) to start Nginx
+- Delete dummy certificate(s)
+- Request real Let's Encrypt certificate(s)
+- Reload Nginx with new certificate(s)
+
+4. Start the service (juga untuk restart rutin / sehabis reboot):
+
+```bash
+./init.sh
+```
 
 ### Running Application
 
-After initial setup, use the usual command:
+After initial setup, untuk menyalakan service:
 
 ```bash
-docker compose up -d
+./init.sh
+```
+
+(ekuivalen `docker compose up -d` + pastikan network ada). Untuk log: `docker compose logs nginx certbot`.
+
+### Template authoring rules (`nginx/secure/*.conf.template`)
+
+- Image nginx me-render hanya variabel yang ADA di environment container (`env_file: .env`) — `${VAR}` yang tidak ada di `.env` lolos mentah ke config dan bikin nginx `emerg`. Jadi: setiap `${VAR}` di template wajib ada di `.env` (walau kosong terdokumentasi), dan file template yang var-nya tidak diisi harus dihapus.
+- Variabel bawaan nginx (`$host`, `$request_uri`, `$http_upgrade`, …) AMAN dibiarkan apa adanya — jangan di-escape jadi `$$` (itu justru merusak config).
+- Proxy ke container yang belum tentu jalan saat nginx start (contoh: `portainer`) wajib pakai pola lazy-DNS agar nginx tidak crash-loop `host not found in upstream`:
+
+```nginx
+resolver 127.0.0.11 valid=30s;
+set $backend_nama service-name;
+proxy_pass http://$backend_nama:9000;
 ```
 
 ## Multiple Domain Setup
@@ -129,8 +175,6 @@ server {
 
     ssl_certificate /etc/letsencrypt/live/domain-b.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/domain-b.com/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     location / {
         proxy_pass http://app-domain-b:3000;  # Domain B application service name
@@ -256,11 +300,8 @@ This setup uses **Let's Encrypt** (via Certbot) to get free SSL certificate, and
 
 #### **Phase 1: Initial Setup (init-letsencrypt.sh)**
 
-1. **Download TLS Parameters** (Lines 26-32)
-   - Download `options-ssl-nginx.conf` and `ssl-dhparams.pem` from Certbot
-   - These files contain recommended TLS security configuration (cipher suites, protocols, etc.)
-
-2. **Create Dummy Certificate** (Lines 34-41)
+1. **Create Dummy Certificate**
+   - TLS policy (Mozilla intermediate) already lives in `nginx/nginx.conf`, so no per-server TLS files are needed.
    - Create dummy (self-signed) certificate with OpenSSL
    - **Why?** Nginx cannot start without certificate. So we create dummy first so Nginx can run
    - This certificate is only valid for 1 day and only for localhost
@@ -306,10 +347,7 @@ This setup uses **Let's Encrypt** (via Certbot) to get free SSL certificate, and
 │                    INITIAL SETUP FLOW                        │
 └─────────────────────────────────────────────────────────────┘
 
-1. Download TLS Parameters
-   └─> options-ssl-nginx.conf, ssl-dhparams.pem
-
-2. Create Dummy Certificate (self-signed)
+1. Create Dummy Certificate (self-signed)
    └─> Nginx can start
 
 3. Start Nginx Container
@@ -387,9 +425,6 @@ server {
     # SSL Certificate configuration
     ssl_certificate /etc/letsencrypt/live/${APP_DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${APP_DOMAIN}/privkey.pem;
-    # SSL Security settings
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     # Proxy to backend application (if configured)
 }
 ```

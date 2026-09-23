@@ -5,16 +5,19 @@ services:
     restart: unless-stopped
     env_file: .env
     networks:
-      - your-domain # Update this with your application service network
+      - shared
     ports:
       - 80:80
       - 443:443
     volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/secure/:/etc/nginx/templates/
       - /etc/localtime:/etc/localtime:ro
-      - ./nginx/certbot/conf:/etc/letsencrypt
-      - ./nginx/certbot/www:/var/www/certbot
+      - certbot_conf_${CERTBOT_VOLUME_TYPE:-dir}:/etc/letsencrypt
+      - certbot_www_${CERTBOT_VOLUME_TYPE:-dir}:/var/www/certbot
+      - cors_map_${CORS_VOLUME_TYPE:-dir}:/etc/nginx/cors.d
       - ./nginx/99-autoreload.sh:/docker-entrypoint.d/99-autoreload.sh  # Script to autoreload Nginx when certs are renewed
+      - ./nginx/90-generate-cors.sh:/docker-entrypoint.d/90-generate-cors.sh  # Script to generate CORS map from env on every start
     environment:
       - NGINX_ENVSUBST_TEMPLATE_DIR=/etc/nginx/templates
       - NGINX_ENVSUBST_TEMPLATE_SUFFIX=.template
@@ -24,13 +27,51 @@ services:
     image: certbot/certbot
     restart: unless-stopped
     networks:
-      - your-domain
+      - shared
     volumes:
-      - ./nginx/certbot/conf:/etc/letsencrypt
-      - ./nginx/certbot/www:/var/www/certbot
+      - certbot_conf_${CERTBOT_VOLUME_TYPE:-dir}:/etc/letsencrypt
+      - certbot_www_${CERTBOT_VOLUME_TYPE:-dir}:/var/www/certbot
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"  # Renew certificates every 12 hours
 
 networks:
-  your-domain:
+  shared:
+    name: ${NETWORK_NAME:-your-domain}
     external: true # Set to false if you want Docker Compose to create the network
 
+volumes:
+  certbot_conf_nfs:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=${CERTBOT_VOLUME_IP},nolock,soft,rw"
+      device: ":${CERTBOT_CONF_VOLUME_PATH}"
+  certbot_conf_dir:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CERTBOT_CONF_VOLUME_PATH}
+  certbot_www_nfs:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=${CERTBOT_VOLUME_IP},nolock,soft,rw"
+      device: ":${CERTBOT_WWW_VOLUME_PATH}"
+  certbot_www_dir:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CERTBOT_WWW_VOLUME_PATH}
+  cors_map_nfs:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=${CORS_VOLUME_IP},nolock,soft,rw"
+      device: ":${CORS_VOLUME_PATH}"
+  cors_map_dir:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CORS_VOLUME_PATH}
