@@ -201,3 +201,66 @@ docker compose config                    # render bersih, tanpa warning
 docker compose up -d && docker compose ps
 curl -H "Origin: https://<domain>" -sI http://localhost/   # dari dalam network
 ```
+
+## Docker Swarm (zero-downtime deploys)
+
+Portainer + nginx tetap standalone compose. Swarm hanya untuk workload app
+(contoh: portfolio) agar deploy rolling tanpa mati sesaat.
+
+### Syarat sekali per server
+
+```bash
+docker swarm init
+# Network BERSAMA wajib overlay + attachable (standalone container nginx/
+# portainer ikut nempel di sini). Migrasi dari bridge = recreate network:
+docker compose -f nginx-platform/docker-compose.yml down
+docker compose -f portainer-platform/docker-compose.yml down
+docker network rm devops
+docker network create --driver overlay --attachable devops
+./nginx-platform/init.sh && ./portainer-platform/init.sh
+```
+
+### Deploy app sebagai stack (BUKAN compose up)
+
+`docker compose up` mengabaikan blok `deploy.update_config` — rolling
+zero-downtime hanya terjadi via `docker stack deploy`:
+
+```bash
+NETWORK_NAME=devops docker stack deploy -c portfolio-stack.yml portfolio
+docker service ls   # 2/2 = sehat
+```
+
+Aturan stack file: tanpa `build` (swarm tidak bisa build — image dari
+registry via CI), tanpa `container_name` (dilarang swarm), `update_config`
+dengan `order: start-first` + healthcheck yang benar (cek port app, bukan
+`exit 0` buta). Contoh lengkap: pola di bawah "docker-compose.yml referensi"
+tetap berlaku, tinggal bungkus service app-nya dengan blok `deploy`.
+
+### Registry auth (wajib untuk update image)
+
+Scheduler swarm me-resolve image dari registry. GHCR privat tanpa login =
+`denied`. Sebelum deploy dari image baru:
+
+```bash
+echo "$GHCR_PAT" | docker login ghcr.io -u <user> --password-stdin
+```
+
+Darurat tanpa akses registry (single-node saja): retag image lokal ke nama
+yang dipakai stack lalu deploy dengan `--resolve-image never`. Cara ini
+tidak mendeteksi image baru — jangan untuk produksi rutin.
+
+### Migrasi dari stack Portainer standalone
+
+Stop + hapus container lama DULU (nama bentrok tidak ada, tapi dua sumber
+deploy = bingung), baru `stack deploy`. Stack lama di UI Portainer akan
+terlihat Stopped — hapus manual di UI agar tidak diklik `Start` tidak sengaja.
+Proxy nginx tidak perlu diubah: hostname service swarm di-resolve ke VIP
+oleh pola lazy-DNS yang sudah ada.
+
+### Uji zero-downtime (bukti, bukan klaim)
+
+```bash
+docker service update --force portfolio_hafidzlvm-portfolio-app &
+for i in $(seq 1 60); do curl -s -o /dev/null -w "%{http_code}\n" --max-time 5 https://hafidzlvm.org/; sleep 2; done
+# ekspektasi: 60x 200, FAIL=0 (terbukti 60/60 saat migrasi 2026-09-23)
+```
