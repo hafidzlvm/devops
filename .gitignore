@@ -2,3 +2,6 @@
 
 volumes/
 **/certbot
+
+# Server-specific nginx drop-ins (per-server statics, not part of the template)
+nginx-platform/nginx/servers/

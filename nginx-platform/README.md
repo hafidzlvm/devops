@@ -224,6 +224,13 @@ docker compose run --rm --entrypoint "\
 docker compose restart nginx
 ```
 
+### Where to put per-server domains (template stays generic)
+
+This repo is a reusable template — never commit real domains here.
+Drop server-specific statics in `nginx/servers/*.conf` (gitignored overlay,
+reloaded with `docker compose exec nginx nginx -s reload`, no recreate).
+Use `nginx/secure/*.conf.template` only for env-driven generic blocks.
+
 ### File Structure for Multiple Domains
 
 ```

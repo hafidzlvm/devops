@@ -12,6 +12,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/secure/:/etc/nginx/templates/
+      - ./nginx/servers/:/etc/nginx/servers/  # Server-specific statics (gitignored overlay)
       - /etc/localtime:/etc/localtime:ro
       - certbot_conf_${CERTBOT_VOLUME_TYPE:-dir}:/etc/letsencrypt
       - certbot_www_${CERTBOT_VOLUME_TYPE:-dir}:/var/www/certbot
