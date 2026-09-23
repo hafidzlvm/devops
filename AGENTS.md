@@ -12,14 +12,14 @@ Docker Compose infra repo. No app code, no package manager, no lint/test/build, 
 
 1. `cp .env.example .env` in each platform used, fill values (never commit `.env` — gitignored).
 2. `docker network create "$NETWORK_NAME"` (both composes attach via key `shared` with `name: ${NETWORK_NAME}`; must match across platforms. `init-letsencrypt.sh` auto-creates it for nginx; portainer needs it manual).
-3. nginx first run only: `chmod +x init-letsencrypt.sh && ./init-letsencrypt.sh`, then `docker compose up -d`.
+3. nginx first run only: `chmod +x init.sh init-letsencrypt.sh && ./init-letsencrypt.sh` (issues certs AND starts nginx), afterwards `./init.sh` for start/restart.
 4. Portainer: `docker compose up -d` in `portainer-platform/`.
 
 ## Conventions & gotchas
 
 - Nginx templating: `nginx/secure/*.conf.template` mounts to `/etc/nginx/templates/`, envsubst renders `${APP_DOMAIN}` from `.env` into `/etc/nginx/conf.d/*.conf`. New domain/subdomain = new `*.conf.template` file + `certbot certonly --webroot` for that `-d` name + `docker compose restart nginx`. Keep `/.well-known/acme-challenge/` → `/var/www/certbot` block in every port-80 server or issuance fails.
 - Cert lifecycle: certbot `renew` every 12h; nginx reload every 6h via `nginx/99-autoreload.sh`. LE certs valid 90 days, rate limit ~50/week — set `staging=1` in `init-letsencrypt.sh` when testing.
-- `init-letsencrypt.sh` bootstrap needs dummy cert because nginx won't start without one; requires DNS already pointing at server and ports 80+443 open. It reads `.env` (`APP_DOMAIN`, `SSL_EMAIL`); single-domain only — extra domains use the manual `certonly` flow in `nginx-platform/README.md`.
+- `init-letsencrypt.sh` bootstrap needs dummy cert because nginx won't start without one; requires DNS already pointing at server and ports 80+443 open. It reads `.env` (`APP_DOMAIN`, `SSL_EMAIL`, optional `PORTAINER_DOMAIN`); idempotent (skips domains with a real cert). Further extra domains use the manual `certonly` flow in `nginx-platform/README.md`.
 - `portainer-platform/docker-compose.yml` mounts certs from `${CERTBOT_BASE_DIR}/live|archive/portainer.${APP_DOMAIN}` and defaults `PORTAINER_COMMAND` to `-H unix:///var/run/docker.sock --tlscert/--tlskey ...` (LE layout). Custom layout (e.g. `/certs/<domain>/cert.pem`) or plain HTTP = set `PORTAINER_COMMAND` in `.env`, no compose edit. Has `portainer_stack:/stack` named volume.
 - Portainer READMEs show `docker-compose` (v1); use `docker compose` (v2) — prereq is Compose ≥2.0, Docker ≥20.10.
 - Gitignored, never commit: `.env`, `volumes/`, `**/certbot` (live certs/keys).

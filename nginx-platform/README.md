@@ -47,6 +47,8 @@ Edit `.env` file:
 ```env
 APP_DOMAIN=your-domain.com
 SSL_EMAIL=contact@your-domain.com
+# Optional: second domain for the Portainer dashboard (see Usage below).
+#PORTAINER_DOMAIN=portainer.example.com
 ```
 
 ### 1b. Volumes & Network (env-driven)
@@ -75,28 +77,62 @@ Edit `nginx/secure/default.conf.template` and adjust:
 
 ## Usage
 
+Script responsibilities — jangan tertukar:
+
+- `./init.sh` — menyalakan service (network + `docker compose up -d`). Ini yang dipakai sehari-hari dan untuk pertama kali menyalakan nginx.
+- `./init-letsencrypt.sh` — hanya urus sertifikat (dummy → request → reload). Idempoten: domain yang sudah punya cert asli di-skip.
+
 ### Initial Setup (First Time)
 
 1. Make sure domain points to your server
-2. Run initialization script:
+2. Copy env dan isi nilai:
 
 ```bash
-chmod +x init-letsencrypt.sh
+cp .env.example .env
+```
+
+`APP_DOMAIN` wajib. `PORTAINER_DOMAIN` opsional — isi jika server ini juga reverse-proxy Portainer (template `nginx/secure/portainer.conf.template` memakainya); jika tidak dipakai, hapus file template tersebut (lihat catatan templating di bawah).
+
+3. Run initialization script:
+
+```bash
+chmod +x init.sh init-letsencrypt.sh
 ./init-letsencrypt.sh
 ```
 
-This script will:
-- Create dummy certificate to start Nginx
-- Delete dummy certificate
-- Request real Let's Encrypt certificate
-- Reload Nginx with new certificate
+This script will (for `APP_DOMAIN`, plus `PORTAINER_DOMAIN` when set):
+- Skip domains that already have a real certificate
+- Create dummy certificate(s) to start Nginx
+- Delete dummy certificate(s)
+- Request real Let's Encrypt certificate(s)
+- Reload Nginx with new certificate(s)
+
+4. Start the service (juga untuk restart rutin / sehabis reboot):
+
+```bash
+./init.sh
+```
 
 ### Running Application
 
-After initial setup, use the usual command:
+After initial setup, untuk menyalakan service:
 
 ```bash
-docker compose up -d
+./init.sh
+```
+
+(ekuivalen `docker compose up -d` + pastikan network ada). Untuk log: `docker compose logs nginx certbot`.
+
+### Template authoring rules (`nginx/secure/*.conf.template`)
+
+- Image nginx me-render hanya variabel yang ADA di environment container (`env_file: .env`) — `${VAR}` yang tidak ada di `.env` lolos mentah ke config dan bikin nginx `emerg`. Jadi: setiap `${VAR}` di template wajib ada di `.env` (walau kosong terdokumentasi), dan file template yang var-nya tidak diisi harus dihapus.
+- Variabel bawaan nginx (`$host`, `$request_uri`, `$http_upgrade`, …) AMAN dibiarkan apa adanya — jangan di-escape jadi `$$` (itu justru merusak config).
+- Proxy ke container yang belum tentu jalan saat nginx start (contoh: `portainer`) wajib pakai pola lazy-DNS agar nginx tidak crash-loop `host not found in upstream`:
+
+```nginx
+resolver 127.0.0.11 valid=30s;
+set $backend_nama service-name;
+proxy_pass http://$backend_nama:9000;
 ```
 
 ## Multiple Domain Setup

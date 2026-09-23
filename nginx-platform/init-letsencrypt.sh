@@ -1,98 +1,104 @@
 #!/bin/bash
+# Bootstrap / renew Let's Encrypt certificates.
+# Scope: certificates only — it does NOT manage the nginx service itself.
+# Use ./init.sh to start the service.
+#
+# Covers ${APP_DOMAIN} always, plus ${PORTAINER_DOMAIN} when set in .env.
+# Idempotent: domains with a real (non-dummy) cert are skipped.
+set -euo pipefail
+cd "$(dirname "$0")"
 
-# Source the .env file (supports quoted values with spaces)
 set -a
-if [ -f .env ]; then
-  # shellcheck disable=SC1091
-  . ./.env
-fi
+[ -f .env ] && . ./.env
 set +a
 
-if ! [ -x "$(command -v docker compose)" ]; then
-    echo 'Error: docker compose is not installed.' >&2
-    exit 1
-fi
-
-domains=(${APP_DOMAIN:-your-domain.com})
-rsa_key_size=4096
-email="${SSL_EMAIL:-your@gmail.com}" # Adding a valid address is strongly recommended
-staging=0 # Set to 1 if you're testing your setup to avoid hitting request limits
+domain="${APP_DOMAIN:?APP_DOMAIN is not set (copy .env.example to .env first)}"
+email="${SSL_EMAIL:-}"
+staging="${STAGING:-0}"
+network_name="${NETWORK_NAME:-your-domain}"
 
 volume_type="${CERTBOT_VOLUME_TYPE:-dir}"
 conf_path="${CERTBOT_CONF_VOLUME_PATH:-/var/lib/nginx-platform/certbot-conf}"
 www_path="${CERTBOT_WWW_VOLUME_PATH:-/var/lib/nginx-platform/certbot-www}"
-cors_path="${CORS_VOLUME_PATH:-/var/lib/nginx-platform/cors}"
-network_name="${NETWORK_NAME:-your-domain}"
 
-# Shared network must exist before any `docker compose run` call.
+docker compose version >/dev/null 2>&1 || { echo "Error: 'docker compose' is not installed." >&2; exit 1; }
+
 docker network inspect "$network_name" >/dev/null 2>&1 || docker network create "$network_name"
 
-# Bind (dir) volumes need an existing host path — the local driver won't create it.
 if [ "$volume_type" = "dir" ]; then
-    mkdir -p "$conf_path" "$www_path" "$cors_path"
+    mkdir -p "$conf_path" "$www_path"
 fi
 
-# File checks below run inside the certbot container, so they work for
-# both dir (bind) and nfs (docker-managed) volumes.
-if docker compose -f "docker-compose.yml" run --rm --entrypoint "sh -c 'test -d /etc/letsencrypt/live/$domains'" certbot >/dev/null 2>&1; then
-    read -p "Existing certificate found for $domains. Continue and replace existing certificate? (y/N) " decision
-    if [ "$decision" != "Y" ] && [ "$decision" != "y" ]; then
-        exit
+domains=("$domain")
+[ -n "${PORTAINER_DOMAIN:-}" ] && domains+=("$PORTAINER_DOMAIN")
+
+cert_has_real_cert() {
+    local d="$1" live="/etc/letsencrypt/live/$1"
+    docker compose run --rm --entrypoint "sh -c 'test -f $live/fullchain.pem'" certbot >/dev/null 2>&1 || return 1
+    local issuer
+    issuer=$(docker compose run --rm --entrypoint "sh -c 'openssl x509 -in $live/fullchain.pem -noout -issuer 2>/dev/null'" certbot 2>/dev/null | tail -1)
+    ! echo "$issuer" | grep -qi "localhost"
+}
+
+needs=()
+for d in "${domains[@]}"; do
+    if cert_has_real_cert "$d"; then
+        echo "Real certificate already exists for $d — skipping."
+    else
+        needs+=("$d")
     fi
-fi
-
-echo "### Creating dummy certificate for $domains ..."
-path="/etc/letsencrypt/live/$domains"
-docker compose -f "docker-compose.yml" run --rm --entrypoint "\
-  mkdir -p '$path' && \
-  openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 1\
-    -keyout '$path/privkey.pem' \
-    -out '$path/fullchain.pem' \
-    -subj '/CN=localhost'" certbot
-
-echo
-
-echo "### Starting nginx ..."
-docker compose  -f "docker-compose.yml" up --force-recreate -d nginx
-
-echo
-
-echo "### Deleting dummy certificate for $domains ..."
-docker compose  -f "docker-compose.yml" run --rm --entrypoint "\
-  rm -Rf /etc/letsencrypt/live/$domains && \
-  rm -Rf /etc/letsencrypt/archive/$domains && \
-  rm -Rf /etc/letsencrypt/renewal/$domains.conf" certbot
-
-echo
-
-echo "### Requesting Let's Encrypt certificate for $domains ..."
-#Join $domains to -d args
-domain_args=""
-for domain in "${domains[@]}"; do
-    domain_args="$domain_args -d $domain"
 done
 
-# Select appropriate email arg
-case "$email" in
-"") email_arg="--register-unsafely-without-email" ;;
-*) email_arg="--email $email" ;;
-esac
+if [ "${#needs[@]}" -eq 0 ]; then
+    echo "Nothing to do."
+    exit 0
+fi
 
-# Enable staging mode if needed
-if [ $staging != "0" ]; then staging_arg="--staging"; fi
-
-docker compose -f "docker-compose.yml" run --rm --entrypoint "\
-  certbot certonly --webroot -w /var/www/certbot \
-    $staging_arg \
-    $email_arg \
-    $domain_args \
-    --rsa-key-size $rsa_key_size \
-    --agree-tos \
-    --no-eff-email \
-    --force-renewal" certbot
-
+for d in "${needs[@]}"; do
+    echo "### Creating dummy certificate for $d ..."
+    docker compose run --rm --entrypoint "\
+      mkdir -p '/etc/letsencrypt/live/$d' && \
+      openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+        -keyout '/etc/letsencrypt/live/$d/privkey.pem' \
+        -out '/etc/letsencrypt/live/$d/fullchain.pem' \
+        -subj '/CN=localhost'" certbot >/dev/null
+done
 echo
 
-#echo "### Reloading nginx ..."
-docker compose -f "docker-compose.yml" exec nginx nginx -s reload
+echo "### (Re)starting nginx with dummy certificate(s) ..."
+docker compose up --force-recreate -d nginx
+sleep 10
+echo
 
+for d in "${needs[@]}"; do
+    echo "### Deleting dummy certificate for $d ..."
+    docker compose run --rm --entrypoint "\
+      rm -rf /etc/letsencrypt/live/$d \
+              /etc/letsencrypt/archive/$d \
+              /etc/letsencrypt/renewal/$d.conf" certbot >/dev/null
+done
+echo
+
+email_arg="--register-unsafely-without-email"
+[ -n "$email" ] && email_arg="--email $email"
+staging_arg=""
+[ "$staging" != "0" ] && staging_arg="--staging"
+
+for d in "${needs[@]}"; do
+    echo "### Requesting Let's Encrypt certificate for $d ..."
+    docker compose run --rm --entrypoint "\
+      certbot certonly --webroot -w /var/www/certbot \
+        $staging_arg \
+        $email_arg \
+        -d $d \
+        --rsa-key-size 4096 \
+        --agree-tos \
+        --no-eff-email \
+        --force-renewal" certbot
+    echo
+done
+
+echo "### Reloading nginx ..."
+docker compose exec nginx nginx -s reload
+echo
+echo "Done."

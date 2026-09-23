@@ -9,27 +9,30 @@ Docker container management platform using Portainer Community Edition.
 
 ## Setup
 
-1. Copy environment template file:
+1. Copy environment template file and fill values (see `.env.example`):
 ```bash
 cp .env.example .env
-```
-
-2. Edit `.env` file according to your needs:
-```bash
 nano .env
 ```
 
-3. Make sure Docker network is created (must match `NETWORK_NAME` in `.env`):
+> `PORTAINER_COMMAND` contains spaces — keep it quoted in `.env`.
+
+2. Start the service (`init.sh` creates the shared network if missing,
+ensures the data host path exists, then `up -d`):
 ```bash
-docker network create your-domain
+chmod +x init.sh
+./init.sh
 ```
+
+3. First-run: open the Portainer URL and create the admin account.
 
 > Volumes are env-driven: `portainer_data_${PORTAINER_VOLUME_TYPE}` (`dir` |
 > `nfs`, see `.env.example`). `dir` mode needs an existing absolute host path
-> (`mkdir -p` it first). `CERTBOT_BASE_DIR` must equal nginx-platform's
-> `CERTBOT_CONF_VOLUME_PATH` for the TLS setup below (dir mode only).
-> `PORTAINER_COMMAND` overrides the full container command (default = TLS;
-> set `-H unix:///var/run/docker.sock` for plain HTTP or custom cert paths).
+> (`mkdir -p` it first — `init.sh` does this automatically).
+> This stack normally runs plain HTTP behind nginx
+> (`PORTAINER_COMMAND="-H unix:///var/run/docker.sock"`) with TLS terminated
+> at nginx (see nginx-platform README, `PORTAINER_DOMAIN`). Direct access stays
+> available on `http://<host>:${PORTAINER_PORT:-9000}`.
 
 4. Run Portainer:
 ```bash
