@@ -169,13 +169,10 @@ Template generiknya sudah ikut repo (`nginx/secure/portainer.conf.template`,
 pakai `${PORTAINER_DOMAIN}` — tanpa hardcode domain):
 
 ```bash
-# 1. nginx-platform/.env:
-PORTAINER_DOMAIN=portainer.example.com
-# 2. DNS portainer.example.com → IP server
-# 3. Terbitkan cert + render template:
-./init-letsencrypt.sh
-docker compose up -d   # sekali saja, agar env baru ke-mount dan template ke-render
-# 4. Verify:
+./enable-portainer.sh portainer.example.com
+# ^ set PORTAINER_DOMAIN di .env + terbitkan cert + up -d + verify.
+# DNS portainer.example.com → IP server wajib sudah mengarah sebelum ini.
+# Verify manual:
 curl -sI https://portainer.example.com/   # 200/307 dari Portainer = ok
 ```
 
@@ -188,7 +185,14 @@ pakai Portainer: kosongkan `PORTAINER_DOMAIN` DAN hapus `portainer.conf.template
 
 Contoh: aplikasi `myapp:8000` di network yang sama (`NETWORK_NAME`).
 JANGAN taruh di `secure/*.template` (itu untuk blok generik env-driven) —
-pakai overlay gitignored `nginx/servers/myapp.conf`:
+pakai overlay gitignored `nginx/servers/myapp.conf`. Cara cepat pakai script
+(isi bloknya sama dengan contoh manual di bawah):
+
+```bash
+./add-site.sh -d myapp.example.com -b myapp:8000
+```
+
+Manual (tanpa script) — tulis file berikut sebagai `nginx/servers/myapp.conf`:
 
 ```nginx
 server {
@@ -250,7 +254,12 @@ curl -sI https://myapp.example.com/
 
 ### 3. URL baru dengan prefix `api-` (mis. `api.example.com`)
 
-Sama persis seperti resep 2 dengan `server_name api.example.com`.
+Sama persis seperti resep 2 dengan `server_name api.example.com` — cara cepat:
+
+```bash
+./add-site.sh -d api.example.com -b myapi:8000
+```
+
 Dua catatan:
 
 - Subdomain dari base yang sudah terdaftar di `CORS_BASE_DOMAINS` otomatis
@@ -264,7 +273,13 @@ Dua catatan:
 ### 4. Domain baru di satu server (mis. apex + www)
 
 Sama seperti resep 2, dengan `server_name domainbaru.com www.domainbaru.com`
-dan satu cert SAN mencakup keduanya:
+dan satu cert SAN mencakup keduanya — cara cepat:
+
+```bash
+./add-site.sh -d domainbaru.com -d www.domainbaru.com -b web:3000
+```
+
+Manual (tanpa script):
 
 ```bash
 docker compose run --rm --entrypoint "certbot certonly --webroot -w /var/www/certbot \
