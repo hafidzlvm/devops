@@ -26,6 +26,11 @@ chmod +x init.sh
 
 3. First-run: open the Portainer URL and create the admin account.
 
+> Swarm belakangan: Portainer tetap standalone — migrasi network ke
+> overlay+attachable diurus `nginx-platform/init-docker-swarm.sh` (lihat resep 5 di
+> README nginx-platform). Urutan normal tetap nginx dulu, portainer,
+> swarm terakhir.
+
 > Volumes are env-driven: `portainer_data_${PORTAINER_VOLUME_TYPE}` (`dir` |
 > `nfs`, see `.env.example`). `dir` mode needs an existing absolute host path
 > (`mkdir -p` it first — `init.sh` does this automatically).

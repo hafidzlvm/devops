@@ -16,6 +16,7 @@ This setup allows you to configure SSL with Let's Encrypt using Certbot and Ngin
 ├── .env (create from .env.example, gitignored)
 ├── .env.example
 ├── init.sh                    # start service (network + up -d)
+├── init-docker-swarm.sh              # ONE-TIME: bridge -> overlay+attachable (swarm belakangan)
 ├── init-letsencrypt.sh        # certs only (APP_DOMAIN + optional PORTAINER_DOMAIN)
 ├── add-site.sh                # register new front endpoint (servers/ + cert + reload)
 ├── enable-portainer.sh        # set PORTAINER_DOMAIN + cert + up
@@ -305,6 +306,31 @@ docker compose exec nginx nginx -s reload
 Batasan Let's Encrypt: ~50 cert/minggu per domain — untuk latihan pakai
 `STAGING=1` di `.env` lalu `./init-letsencrypt.sh` (staging hanya untuk
 APP_DOMAIN/PORTAINER_DOMAIN).
+
+### 5. Swarm belakangan (opsional, zero-downtime app ke depan)
+
+`docker swarm init` aman kapan pun — container standalone yang sudah jalan
+tidak disentuh. Yang butuh jeda mati singkat hanya migrasi network
+bridge → overlay+attachable (front restart sekali). Normalnya naikkan dulu
+nginx baru portainer seperti biasa, swarm belakangan tidak masalah.
+
+Satu perintah (dari folder ini, baca `.env` kedua platform):
+
+```bash
+chmod +x init-docker-swarm.sh
+./init-docker-swarm.sh                        # single-NIC
+SWARM_ADVERTISE_ADDR=<ip-server> ./init-docker-swarm.sh   # multi-NIC
+```
+
+Script: cek `NETWORK_NAME` sama di kedua `.env` → join swarm (skip kalau
+sudah) → abort SEBELUM menyentuh apa pun bila ada app asing di network
+(sebut nama) → `down` kedua platform → recreate network sebagai
+overlay+attachable (skip bila sudah overlay) → `up` lagi keduanya.
+Portainer tetap standalone — yang berubah hanya network bersama.
+Sesudahnya: re-attach tiap app (`up -d --force-recreate`) atau migrasi ke
+`docker stack deploy` (lihat `deploy-platform/DOCKER-PATTERN.md`).
+
+Rollback kapan pun: `docker swarm leave --force` (container standalone utuh).
 
 ## Multiple Domain Setup
 

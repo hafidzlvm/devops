@@ -13,7 +13,7 @@ Docker Compose infra repo. No app code, no package manager, no lint/test/build, 
 1. `cp .env.example .env` in each platform used, fill values (never commit `.env` — gitignored).
 2. `docker network create "$NETWORK_NAME"` (both composes attach via key `shared` with `name: ${NETWORK_NAME}`; must match across platforms. `init-letsencrypt.sh` auto-creates it for nginx; portainer needs it manual).
 3. nginx first run only: `chmod +x init.sh init-letsencrypt.sh && ./init-letsencrypt.sh` (issues certs AND starts nginx), afterwards `./init.sh` for start/restart.
-4. Portainer: `docker compose up -d` in `portainer-platform/`.
+4. Portainer: `./init.sh` in `portainer-platform/` (stays standalone; swarm migration, if ever, via `nginx-platform/init-docker-swarm.sh`).
 
 ## Conventions & gotchas
 
