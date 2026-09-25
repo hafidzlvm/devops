@@ -372,6 +372,9 @@ nginx-platform/nginx/servers/    # GITIGNORED per-server statics (./add-site.sh 
 
 ### Removing Domain
 
+Fast path: `./remove-site.sh -n <name> [--delete-cert]` (backup otomatis + reload).
+Manual (tanpa script):
+
 To remove domain from Nginx:
 
 1. **Delete its file in the overlay:**
