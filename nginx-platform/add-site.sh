@@ -86,10 +86,20 @@ echo
 live="/etc/letsencrypt/live/${primary}"
 need_cert=1
 if docker compose run --rm --entrypoint "sh -c 'test -f $live/fullchain.pem'" certbot >/dev/null 2>&1; then
-    issuer=$(docker compose run --rm --entrypoint "sh -c 'openssl x509 -in $live/fullchain.pem -noout -issuer 2>/dev/null'" certbot 2>/dev/null | tail -1)
-    if ! echo "$issuer" | grep -qi "localhost"; then
-        echo "Real certificate already exists for $primary — skipping issuance."
-        need_cert=0
+    certinfo=$(docker compose run --rm --entrypoint "sh -c 'openssl x509 -in $live/fullchain.pem -noout -issuer -ext subjectAltName 2>/dev/null'" certbot 2>/dev/null)
+    if echo "$certinfo" | grep -qi "localhost"; then
+        : # dummy cert — must (re)issue
+    else
+        missing=0
+        for d in "${domains[@]}"; do
+            echo "$certinfo" | grep -q "DNS:$d" || missing=1
+        done
+        if [ "$missing" = "0" ]; then
+            echo "Real certificate already covers: ${server_names} — skipping issuance."
+            need_cert=0
+        else
+            echo "Existing cert does not cover all of: ${server_names} — re-issuing (expand)."
+        fi
     fi
 fi
 
